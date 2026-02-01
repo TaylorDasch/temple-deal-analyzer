@@ -27,10 +27,6 @@ let apiCallCount = 0;
 
 /**
  * Fetch active sale listings for a city
- * 
- * @param {string} city - City name
- * @param {string} state - State abbreviation
- * @returns {Promise<Array>} - Array of listing objects
  */
 async function getListings(city, state) {
   try {
@@ -52,7 +48,11 @@ async function getListings(city, state) {
     const listings = response.data || [];
     console.log(`  ✓ Found ${listings.length} listings in ${city}`);
     
-    // Respect rate limits
+    // Debug: Log first listing structure
+    if (listings.length > 0) {
+      console.log(`  📋 Sample listing fields: ${Object.keys(listings[0]).join(', ')}`);
+    }
+    
     await delay(config.api.requestDelay);
     
     return listings;
@@ -60,7 +60,6 @@ async function getListings(city, state) {
     console.error(`  ✗ Error fetching ${city}: ${error.message}`);
     if (error.response) {
       console.error(`    Status: ${error.response.status}`);
-      console.error(`    Data: ${JSON.stringify(error.response.data)}`);
     }
     return [];
   }
@@ -68,12 +67,6 @@ async function getListings(city, state) {
 
 /**
  * Get rent estimate for a specific property using AVM
- * 
- * @param {string} address - Full property address
- * @param {number} bedrooms - Number of bedrooms
- * @param {number} bathrooms - Number of bathrooms
- * @param {number} squareFootage - Property square footage
- * @returns {Promise<Object|null>} - Rent estimate object or null
  */
 async function getRentEstimate(address, bedrooms, bathrooms, squareFootage) {
   try {
@@ -88,14 +81,14 @@ async function getRentEstimate(address, bedrooms, bathrooms, squareFootage) {
     const response = await api.get('/avm/rent', { params });
     apiCallCount++;
     
-    // Respect rate limits
     await delay(config.api.requestDelay);
     
     return response.data;
   } catch (error) {
-    // Don't log every error to avoid noise - some addresses may not have data
-    if (error.response && error.response.status !== 404) {
-      console.error(`  ✗ Rent estimate error for ${address}: ${error.message}`);
+    // Log ALL errors for debugging
+    console.error(`  ✗ Rent error for "${address}": ${error.message}`);
+    if (error.response) {
+      console.error(`    Status: ${error.response.status}, Data: ${JSON.stringify(error.response.data)}`);
     }
     return null;
   }
@@ -103,9 +96,6 @@ async function getRentEstimate(address, bedrooms, bathrooms, squareFootage) {
 
 /**
  * Fetch listings for all cities in a market
- * 
- * @param {Object} market - Market configuration object
- * @returns {Promise<Array>} - Combined array of all listings
  */
 async function getListingsForMarket(market) {
   console.log(`\n🏘️  Fetching listings for ${market.name}...`);
@@ -115,7 +105,6 @@ async function getListingsForMarket(market) {
   for (const location of market.cities) {
     const listings = await getListings(location.city, location.state);
     
-    // Add market identifier to each listing
     const enrichedListings = listings.map(listing => ({
       ...listing,
       marketId: market.id,
@@ -130,27 +119,43 @@ async function getListingsForMarket(market) {
 }
 
 /**
+ * Build proper address string from listing data
+ */
+function buildAddress(property) {
+  // RentCast listings use these field names
+  const street = property.formattedAddress || property.addressLine1 || property.address;
+  const city = property.city;
+  const state = property.state;
+  const zip = property.zipCode || property.zip;
+  
+  // If formattedAddress already contains full address, use it directly
+  if (street && street.includes(',') && street.includes(state)) {
+    return street;
+  }
+  
+  // Otherwise build it
+  return [street, city, state, zip].filter(Boolean).join(', ');
+}
+
+/**
  * Get rent estimates for multiple properties with rate limiting
- * 
- * @param {Array} properties - Array of property objects
- * @param {Function} progressCallback - Optional callback for progress updates
- * @returns {Promise<Array>} - Properties enriched with rent estimates
  */
 async function enrichWithRentEstimates(properties, progressCallback) {
   console.log(`\n💰 Fetching rent estimates for ${properties.length} properties...`);
+  
+  // Debug: Show first property structure
+  if (properties.length > 0) {
+    const first = properties[0];
+    console.log(`  📋 First property keys: ${Object.keys(first).join(', ')}`);
+    const addr = buildAddress(first);
+    console.log(`  📋 First address to query: "${addr}"`);
+  }
   
   const enriched = [];
   
   for (let i = 0; i < properties.length; i++) {
     const property = properties[i];
-    
-    // Build full address
-    const address = [
-      property.formattedAddress || property.addressLine1,
-      property.city,
-      property.state,
-      property.zipCode
-    ].filter(Boolean).join(', ');
+    const address = buildAddress(property);
     
     const rentData = await getRentEstimate(
       address,
@@ -166,12 +171,10 @@ async function enrichWithRentEstimates(properties, progressCallback) {
         rentRangeLow: rentData.rentRangeLow,
         rentRangeHigh: rentData.rentRangeHigh,
       });
+      console.log(`  ✓ Got rent $${rentData.rent} for ${address}`);
     }
     
-    // Progress update
-    if (progressCallback) {
-      progressCallback(i + 1, properties.length);
-    } else if ((i + 1) % 10 === 0) {
+    if ((i + 1) % 10 === 0) {
       console.log(`  ⏳ Processed ${i + 1}/${properties.length}...`);
     }
   }
@@ -180,16 +183,10 @@ async function enrichWithRentEstimates(properties, progressCallback) {
   return enriched;
 }
 
-/**
- * Get the total API call count (for logging/debugging)
- */
 function getApiCallCount() {
   return apiCallCount;
 }
 
-/**
- * Reset API call counter
- */
 function resetApiCallCount() {
   apiCallCount = 0;
 }

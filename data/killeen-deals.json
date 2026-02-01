@@ -1,0 +1,16 @@
+{
+  "market": {
+    "id": "killeen",
+    "name": "Killeen"
+  },
+  "lastUpdated": "2025-02-01T00:00:00.000Z",
+  "summary": {
+    "totalDeals": 0,
+    "avgGrossYield": 0,
+    "avgPrice": 0,
+    "avgMonthlyRent": 0,
+    "topYield": 0,
+    "lowestPrice": 0
+  },
+  "deals": []
+}

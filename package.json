@@ -1,0 +1,15 @@
+{
+  "name": "temple-deal-analyzer",
+  "version": "1.0.0",
+  "description": "Automated investment property analyzer for Temple, Belton, Harker Heights, and Killeen TX",
+  "main": "src/index.js",
+  "scripts": {
+    "analyze": "node src/index.js",
+    "test": "node src/index.js --test"
+  },
+  "author": "Taylor Dasch",
+  "license": "PRIVATE",
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}

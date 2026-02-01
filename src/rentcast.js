@@ -1,5 +1,5 @@
 /**
- * RentCast API Wrapper - v4 with Price Per SqFt
+ * RentCast API Wrapper - v6 Conservative Rent Estimates
  */
 
 const axios = require('axios');
@@ -16,12 +16,8 @@ const api = axios.create({
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 let apiCallCount = 0;
 
-// Cache for rental data by city
 const rentalCache = {};
 
-/**
- * Fetch active rental listings to build rent estimates
- */
 async function getRentalListings(city, state) {
   try {
     const params = {
@@ -49,10 +45,6 @@ async function getRentalListings(city, state) {
   }
 }
 
-/**
- * Build rent estimate data from actual rental listings
- * Returns both median by bedroom AND price per sqft
- */
 function buildRentTable(rentals, cityName) {
   const rentsByBed = { 2: [], 3: [], 4: [], 5: [] };
   const pricePerSqft = [];
@@ -65,24 +57,23 @@ function buildRentTable(rentals, cityName) {
     if (beds >= 2 && beds <= 5 && price > 500 && price < 5000) {
       rentsByBed[beds].push(price);
       
-      // Calculate price per sqft if we have sqft data
       if (sqft && sqft > 500) {
         pricePerSqft.push(price / sqft);
       }
     }
   }
   
-  // Calculate median rent for each bedroom count
   const medians = {};
   for (const [beds, prices] of Object.entries(rentsByBed)) {
     if (prices.length > 0) {
       prices.sort((a, b) => a - b);
       const mid = Math.floor(prices.length / 2);
-      medians[beds] = prices.length % 2 ? prices[mid] : Math.round((prices[mid - 1] + prices[mid]) / 2);
+      medians[beds] = prices.length % 2 
+        ? prices[mid] 
+        : Math.round((prices[mid - 1] + prices[mid]) / 2);
     }
   }
   
-  // Calculate median price per sqft
   let medianPricePerSqft = null;
   if (pricePerSqft.length > 0) {
     pricePerSqft.sort((a, b) => a - b);
@@ -90,30 +81,52 @@ function buildRentTable(rentals, cityName) {
     medianPricePerSqft = pricePerSqft.length % 2 
       ? pricePerSqft[mid] 
       : (pricePerSqft[mid - 1] + pricePerSqft[mid]) / 2;
-    medianPricePerSqft = Math.round(medianPricePerSqft * 100) / 100; // Round to 2 decimals
+    medianPricePerSqft = Math.round(medianPricePerSqft * 100) / 100;
   }
   
-  console.log(`  📐 ${cityName} price/sqft: $${medianPricePerSqft || 'N/A'} (from ${pricePerSqft.length} rentals with sqft data)`);
+  console.log(`  📐 ${cityName} price/sqft: $${medianPricePerSqft || 'N/A'} (from ${pricePerSqft.length} rentals)`);
   
   return { medians, pricePerSqft: medianPricePerSqft };
 }
 
 /**
- * Get rent estimate - prefer $/sqft, fallback to bedroom median
+ * Conservative rent estimate based on Taylor's local knowledge:
+ * - 1500 sqft = $1,550/mo
+ * - 2000 sqft = $2,000/mo
+ * - 2500 sqft = $2,200/mo (MFH only)
+ * - 3000 sqft = $2,500/mo (MFH only)
  */
-function getRentEstimate(city, bedrooms, sqft, rentTable) {
+function getRentEstimate(city, bedrooms, sqft, rentTable, propertyType) {
   const beds = Math.min(Math.max(bedrooms || 3, 2), 5);
+  const isMFH = propertyType && propertyType.toLowerCase().includes('multi');
   
-  // BEST: Use price per sqft if available
-  if (rentTable.pricePerSqft && sqft && sqft > 500) {
-    const estimate = Math.round(sqft * rentTable.pricePerSqft);
-    // Sanity check - rent should be between $800 and $3500
-    if (estimate >= 800 && estimate <= 3500) {
-      return estimate;
+  if (sqft && sqft > 500) {
+    let estimate;
+    
+    if (sqft <= 1500) {
+      // Under 1500 sqft: ~$1.03/sqft
+      estimate = Math.round(sqft * 1.03);
+    } else if (sqft <= 2000) {
+      // 1500-2000 sqft: $1,550 base + $0.90/sqft for overage
+      estimate = 1550 + Math.round((sqft - 1500) * 0.90);
+    } else if (isMFH && sqft <= 2500) {
+      // 2000-2500 sqft (MFH only): $2,000 base + $0.40/sqft
+      estimate = 2000 + Math.round((sqft - 2000) * 0.40);
+    } else if (isMFH) {
+      // 2500+ sqft (MFH only): $2,200 base + $0.60/sqft, cap at $2,800
+      estimate = 2200 + Math.round((sqft - 2500) * 0.60);
+      estimate = Math.min(estimate, 2800);
+    } else {
+      // SFH over 2000 sqft shouldn't reach here (filtered out), but fallback
+      estimate = 2000;
     }
+    
+    // Sanity bounds
+    estimate = Math.max(800, Math.min(estimate, 2800));
+    return estimate;
   }
   
-  // FALLBACK: Use bedroom median with sqft adjustment
+  // Fallback to bedroom median
   let baseRent = rentTable.medians?.[beds];
   
   if (!baseRent) {
@@ -121,14 +134,7 @@ function getRentEstimate(city, bedrooms, sqft, rentTable) {
     baseRent = defaults[beds];
   }
   
-  // Adjust based on sqft
-  const typicalSqft = { 2: 1100, 3: 1500, 4: 1900, 5: 2300 };
-  if (sqft && sqft > 0) {
-    const sqftRatio = sqft / typicalSqft[beds];
-    baseRent = Math.round(baseRent * sqftRatio);
-  }
-  
-  return Math.min(Math.max(baseRent, 800), 3500);
+  return Math.min(Math.max(baseRent, 800), 2400);
 }
 
 async function getListings(city, state) {
@@ -163,21 +169,18 @@ async function getListings(city, state) {
 async function getListingsForMarket(market) {
   console.log(`\n🏘️  Fetching data for ${market.name}...`);
   
-  // First, get rental listings to build rent estimates
   console.log(`\n📊 Building rent estimates from active rentals...`);
   for (const location of market.cities) {
     const rentals = await getRentalListings(location.city, location.state);
     const rentTable = buildRentTable(rentals, location.city);
     rentalCache[location.city] = rentTable;
     
-    // Log bedroom medians
     const entries = Object.entries(rentTable.medians);
     if (entries.length > 0) {
       console.log(`  💰 ${location.city} medians: ${entries.map(([b, r]) => `${b}br=$${r}`).join(', ')}`);
     }
   }
   
-  // Then get sale listings
   let allListings = [];
   
   for (const location of market.cities) {
@@ -196,32 +199,22 @@ async function getListingsForMarket(market) {
   return allListings;
 }
 
-/**
- * Enrich properties with rent estimates from rental comps
- */
 async function enrichWithRentEstimates(properties, progressCallback) {
-  console.log(`\n💰 Calculating rent estimates for ${properties.length} properties using $/sqft method...`);
+  console.log(`\n💰 Calculating rent estimates for ${properties.length} properties...`);
+  console.log(`  ℹ️  Using conservative model: 1500sqft=$1550, 2000sqft=$2000`);
   
   const enriched = [];
-  let sqftMethodCount = 0;
-  let fallbackCount = 0;
   
   for (let i = 0; i < properties.length; i++) {
     const property = properties[i];
     const rentTable = rentalCache[property.city] || { medians: {}, pricePerSqft: null };
     
-    const usingSqftMethod = rentTable.pricePerSqft && property.squareFootage > 500;
-    if (usingSqftMethod) {
-      sqftMethodCount++;
-    } else {
-      fallbackCount++;
-    }
-    
     const rentEstimate = getRentEstimate(
       property.city,
       property.bedrooms,
       property.squareFootage,
-      rentTable
+      rentTable,
+      property.propertyType
     );
     
     enriched.push({
@@ -237,7 +230,6 @@ async function enrichWithRentEstimates(properties, progressCallback) {
   }
   
   console.log(`  ✓ Generated rent estimates for ${enriched.length} properties`);
-  console.log(`  📐 Method breakdown: ${sqftMethodCount} using $/sqft, ${fallbackCount} using bedroom median`);
   return enriched;
 }
 
